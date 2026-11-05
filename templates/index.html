@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Генератор документов</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --text:#1c2230; --muted:#667085; --line:#d9dde5; --acc:#2563eb; --ok:#15803d; --warn:#b45309; --err:#b91c1c; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151c; --card:#1b202a; --text:#e8ebf1; --muted:#98a2b3; --line:#2f3644; --acc:#60a5fa; --ok:#4ade80; --warn:#fbbf24; --err:#f87171; }
+  }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 -apple-system,system-ui,sans-serif; padding:24px 16px }
+  main { max-width:820px; margin:0 auto }
+  h1 { font-size:22px; margin:0 0 4px } .sub { color:var(--muted); margin:0 0 20px }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px; margin-bottom:16px }
+  .card h2 { font-size:15px; margin:0 0 12px }
+  .drops { display:grid; grid-template-columns:1fr 1fr; gap:12px }
+  @media (max-width:600px){ .drops{grid-template-columns:1fr} }
+  label.drop { border:2px dashed var(--line); border-radius:8px; padding:20px 12px; text-align:center; cursor:pointer; display:block; color:var(--muted) }
+  label.drop.has { border-style:solid; border-color:var(--ok); color:var(--text) }
+  label.drop input { display:none } label.drop b { display:block; color:var(--text); margin-bottom:2px }
+  button { background:var(--acc); color:#fff; border:0; border-radius:8px; padding:10px 18px; font-size:15px; cursor:pointer }
+  button:disabled { opacity:.5; cursor:default } button.sec { background:transparent; color:var(--acc); border:1px solid var(--acc) }
+  input[type=text], select { width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); font-size:15px }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px } @media (max-width:600px){ .row{grid-template-columns:1fr} }
+  .row span { display:block; font-size:13px; color:var(--muted); margin-bottom:4px }
+  .tablewrap { overflow-x:auto } table { border-collapse:collapse; width:100%; font-size:13px }
+  th,td { border:1px solid var(--line); padding:5px 8px; text-align:left; white-space:nowrap } th { background:var(--bg) }
+  .chips span { display:inline-block; background:var(--bg); border:1px solid var(--line); border-radius:99px; padding:1px 10px; margin:2px 4px 2px 0; font-size:13px }
+  .chips span.bad { border-color:var(--err); color:var(--err) }
+  .msg { padding:10px 12px; border-radius:8px; margin-top:10px; font-size:14px }
+  .msg.err { background:color-mix(in srgb,var(--err) 12%,transparent); color:var(--err) }
+  .msg.warn { background:color-mix(in srgb,var(--warn) 12%,transparent); color:var(--warn) }
+  .msg.ok { background:color-mix(in srgb,var(--ok) 12%,transparent); color:var(--ok) }
+  .hidden { display:none } ul { margin:6px 0 0; padding-left:20px }
+</style>
+</head>
+<body>
+<main>
+  <h1>Генератор документов</h1>
+  <p class="sub">Excel с данными + Word-шаблон с метками вида <code>&#123;&#123;ФИО&#125;&#125;</code> → отдельный .docx на каждого человека. Всё работает локально.</p>
+
+  <div class="card">
+    <h2>1. Загрузите файлы</h2>
+    <div class="drops">
+      <label class="drop" id="dx"><input type="file" id="fx" accept=".xlsx"><b>Таблица Excel</b><span>.xlsx, первая строка — заголовки</span></label>
+      <label class="drop" id="dd"><input type="file" id="fd" accept=".docx"><b>Шаблон Word</b><span>.docx с метками &#123;&#123;Колонка&#125;&#125;</span></label>
+    </div>
+    <div id="upmsg"></div>
+  </div>
+
+  <div class="card hidden" id="step2">
+    <h2>2. Проверьте данные</h2>
+    <p id="info" style="margin-top:0"></p>
+    <div class="tablewrap"><table id="prev"></table></div>
+    <p style="margin-bottom:4px">Метки в шаблоне:</p>
+    <div class="chips" id="chips"></div>
+  </div>
+
+  <div class="card hidden" id="step3">
+    <h2>3. Сохранение</h2>
+    <div class="row">
+      <label><span>Колонка для имени файла</span><select id="namecol"></select></label>
+      <label><span>Папка на диске</span><input type="text" id="outdir" value="{{ default_out }}"></label>
+    </div>
+    <button id="go">Сформировать документы</button>
+    <div id="result"></div>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let token = null;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function msg(el, cls, html){ el.innerHTML = `<div class="msg ${cls}">${html}</div>`; }
+
+async function tryUpload(){
+  const x = $('fx').files[0], d = $('fd').files[0];
+  $('dx').classList.toggle('has', !!x); $('dd').classList.toggle('has', !!d);
+  if (x) $('dx').querySelector('span').textContent = x.name;
+  if (d) $('dd').querySelector('span').textContent = d.name;
+  if (!x || !d) return;
+  const fd = new FormData(); fd.append('xlsx', x); fd.append('docx', d);
+  $('upmsg').innerHTML = '';
+  const r = await fetch('/upload', {method:'POST', body:fd});
+  const j = await r.json();
+  if (!r.ok) { msg($('upmsg'), 'err', esc(j.error)); return; }
+  token = j.token;
+  $('info').textContent = `Найдено строк: ${j.count}. Колонки: ${j.columns.join(', ')}`;
+  $('prev').innerHTML = '<tr>' + j.columns.map(c=>`<th>${esc(c)}</th>`).join('') + '</tr>' +
+    j.preview.map(r => '<tr>' + j.columns.map(c=>`<td>${esc(r[c] ?? '')}</td>`).join('') + '</tr>').join('');
+  $('chips').innerHTML = j.placeholders.length
+    ? j.placeholders.map(p => `<span class="${j.unmatched.includes(p)?'bad':''}">${esc(p)}</span>`).join('')
+    : '<em>Меток &#123;&#123;...&#125;&#125; в шаблоне не найдено</em>';
+  if (j.unmatched.length) msg($('upmsg'), 'warn', 'Нет колонки в Excel для меток: ' + j.unmatched.map(esc).join(', '));
+  $('namecol').innerHTML = j.columns.map(c=>`<option>${esc(c)}</option>`).join('');
+  const fio = j.columns.find(c => /фио|ф\.и\.о|имя/i.test(c)); if (fio) $('namecol').value = fio;
+  $('step2').classList.remove('hidden'); $('step3').classList.remove('hidden');
+  $('result').innerHTML = '';
+}
+$('fx').onchange = $('fd').onchange = tryUpload;
+
+$('go').onclick = async () => {
+  $('go').disabled = true; $('go').textContent = 'Формирую…';
+  const r = await fetch('/generate', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({token, name_column:$('namecol').value, out_dir:$('outdir').value})});
+  const j = await r.json();
+  $('go').disabled = false; $('go').textContent = 'Сформировать документы';
+  if (!r.ok) { msg($('result'), 'err', esc(j.error)); return; }
+  let h = `<div class="msg ok">Создано документов: <b>${j.files.length}</b><br>Папка: <code>${esc(j.out_dir)}</code><br><br><a href="/zip/${token}"><button class="sec" type="button">Скачать ZIP</button></a></div>`;
+  if (j.warnings.length) h += `<div class="msg warn"><b>Предупреждения:</b><ul>${j.warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul></div>`;
+  $('result').innerHTML = h;
+};
+</script>
+</body>
+</html>
